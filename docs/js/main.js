@@ -1,0 +1,46 @@
+// Backend API base URL.
+// - Uses localhost when running the site locally
+// - Uses the deployed Render URL in production
+const API_BASE = window.location.hostname === 'localhost'
+    ? 'http://localhost:3000'
+    : 'https://likelyhood-v2.onrender.com';
+
+async function fetchHarryHoodStats() {
+    try {
+    const response = await fetch(`${API_BASE}/api/harry-hood-stats`);
+        const data = await response.json();
+
+        // Update last performance details
+        document.getElementById('last-date').textContent = formatDate(data.lastPerformance.date);
+        document.getElementById('last-venue').textContent = data.lastPerformance.venue;
+
+        // Update shows since last performance
+        document.getElementById('shows-since').textContent = `${data.showsSinceLastPerformance} shows`;
+
+        // Update probability
+        document.getElementById('probability-fill').style.width = `${data.probability}%`;
+        document.getElementById('probability-text').textContent = `${data.probability}%`;
+    } catch (error) {
+        console.error('Error fetching stats:', error);
+        document.getElementById('last-date').textContent = 'Error loading data';
+        document.getElementById('last-venue').textContent = 'Please try again later';
+        document.getElementById('shows-since').textContent = 'Error';
+        document.getElementById('probability-text').textContent = 'Error';
+    }
+}
+
+function formatDate(dateString) {
+    const options = { 
+        weekday: 'long', 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+    };
+    return new Date(dateString).toLocaleDateString('en-US', options);
+}
+
+// Fetch stats when page loads
+fetchHarryHoodStats();
+
+// Refresh stats every 5 minutes
+setInterval(fetchHarryHoodStats, 300000);
