@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: likelyhood-backend
+    rootDir: backend
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: PHISH_API_KEY
+        sync: false
+    healthCheckPath: /
