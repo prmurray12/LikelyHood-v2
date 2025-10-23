@@ -1,10 +1,13 @@
-// Backend API base URL. For local dev, keep localhost. After deploying to Render,
-// replace with your Render service URL, e.g., 'https://likelyhood-backend.onrender.com'
-const API_URL = 'http://localhost:3000';
+// Backend API base URL.
+// - Uses localhost when running the site locally
+// - Uses the deployed Render URL in production
+const API_BASE = window.location.hostname === 'localhost'
+    ? 'http://localhost:3000'
+    : 'https://likelyhood-v2.onrender.com';
 
 async function fetchHarryHoodStats() {
     try {
-        const response = await fetch(`${API_URL}/api/harry-hood-stats`);
+    const response = await fetch(`${API_BASE}/api/harry-hood-stats`);
         const data = await response.json();
 
         // Update last performance details
