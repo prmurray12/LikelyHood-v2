@@ -4,7 +4,8 @@ body {
     margin: 0;
     padding: 20px;
     background-color: #f0f0f0;
-    background-image: url('images/donuts.jpg');
+    /* Note: CSS file is in docs/css, so image path must step up one folder */
+    background-image: url('../images/donuts.jpg');
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
