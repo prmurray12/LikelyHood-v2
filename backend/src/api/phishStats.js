@@ -3,6 +3,8 @@ const axios = require('axios');
 const router = express.Router();
 
 const API_BASE_URL = 'https://api.phish.net/v3';
+// Cache for daily Likely Hood value (resets on process restart)
+let likelyHoodCache = { date: null, value: null };
 
 // Helper to strip HTML tags (e.g., venue anchor -> plain text)
 const stripHtml = (html) => (html ? html.replace(/<[^>]*>/g, '').trim() : '');
@@ -51,7 +53,6 @@ async function fetchUpcomingShows() {
         raw = data.response.data;
         break;
       }
-      // Some variants may return the array directly
       if (Array.isArray(data)) {
         raw = data;
         break;
@@ -62,20 +63,18 @@ async function fetchUpcomingShows() {
     }
   }
 
-  // Normalize and filter for Phish only
   const isPhish = (s) => {
     const fields = [s.artist, s.artist_name, s.band, s.artist_slug, s.artistid, s.gid, s.group];
-    if (typeof s.artistid === 'number' && s.artistid === 1) return true; // common Phish id in phish.net
+    if (typeof s.artistid === 'number' && s.artistid === 1) return true;
     return fields.some(f => typeof f === 'string' && /phish/i.test(f));
   };
 
   const norm = raw
     .filter(isPhish)
     .map(s => {
-      // Prefer ISO showdate if present; fallback to short_date (MM/DD/YYYY)
       let isoDate = null;
       if (s.showdate) {
-        isoDate = s.showdate; // often YYYY-MM-DD
+        isoDate = s.showdate;
       } else if (s.short_date) {
         const parts = String(s.short_date).split('/');
         if (parts.length === 3) {
@@ -95,7 +94,6 @@ async function fetchUpcomingShows() {
     })
     .filter(s => !!s.date);
 
-  // Sort ascending by date
   norm.sort((a, b) => new Date(a.date) - new Date(b.date));
   return norm;
 }
@@ -154,9 +152,9 @@ router.get('/harry-hood-stats', async (req, res) => {
     // Calculate shows since last performance as the number of shows that occurred after that show
     const showsSince = hoodIndex; // because index 0 is most recent
 
-    // Probability from util (based on shows window)
-    const { computeProbabilityFromSetlists } = require('../utils/probability');
-    const probabilityPct = computeProbabilityFromSetlists(shows);
+  // Probability from util (based on shows window)
+  const { computeProbabilityFromSetlists, computeAvgGapFromSetlists } = require('../utils/probability');
+  const probabilityPct = computeProbabilityFromSetlists(shows);
 
     // Upcoming shows for Phish only (fail-safe to empty array on error)
     let upcoming = [];
@@ -173,19 +171,26 @@ router.get('/harry-hood-stats', async (req, res) => {
     const todayStr = formatYMD(today);
     const hasShowToday = upcoming.some(s => s.date === todayStr);
 
-    // Likely Hood (tonight): if show today, same as probability; else small random [0.000001, 0.1]
+    // Likely Hood (tonight): cache once per day regardless of traffic
     let likelyHoodPct;
-    if (hasShowToday) {
-      likelyHoodPct = probabilityPct;
+    if (likelyHoodCache.date !== todayStr) {
+      if (hasShowToday) {
+        likelyHoodPct = probabilityPct;
+      } else {
+        const r = 0.000001 + Math.random() * (0.1 - 0.000001); // fraction
+        likelyHoodPct = Math.max(0.01, Math.round(r * 10000) / 100); // show with 2 decimals, min 0.01%
+      }
+      likelyHoodCache = { date: todayStr, value: likelyHoodPct };
     } else {
-      const r = 0.000001 + Math.random() * (0.1 - 0.000001); // fraction
-      likelyHoodPct = Math.max(0.01, Math.round(r * 10000) / 100); // show with 2 decimals, min 0.01%
+      likelyHoodPct = likelyHoodCache.value;
     }
 
-    // Predict next expected performance using geometric expectation ~ ceil(1/p)
-    const p = Math.max(0.0001, Math.min(0.99, probabilityPct / 100));
-    const expectedIndex = Math.max(0, Math.ceil(1 / p) - 1);
-    const predicted = upcoming.length ? upcoming[Math.min(expectedIndex, upcoming.length - 1)] : null;
+  // Predict next expected performance using user's simplified rule:
+  // expectedGap = avgGapShows - showsSince; choose the show expectedGap ahead
+  const avgGapShows = computeAvgGapFromSetlists(shows);
+  const expectedGapRaw = avgGapShows - showsSince;
+  const expectedIndex = Math.max(0, Math.ceil(expectedGapRaw));
+  const predicted = upcoming.length ? upcoming[Math.min(expectedIndex, upcoming.length - 1)] : null;
 
     res.json({
       lastPerformance: {
