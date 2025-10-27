@@ -35,13 +35,32 @@ async function fetchLatestSetlists(limit = 200, offset = 0) {
 
 // Fetch upcoming shows from phish.net and return an array of normalized show objects
 async function fetchUpcomingShows() {
-  // Try JSONP like other v3 endpoints for consistency
-  const url = `${API_BASE_URL}/shows/upcoming?apikey=${process.env.PHISH_API_KEY}&callback=?`;
-  const resp = await axios.get(url, { timeout: 15000 });
-  const parsed = parseJsonp(resp.data);
-  const raw = parsed && parsed.response && Array.isArray(parsed.response.data)
-    ? parsed.response.data
-    : [];
+  const key = process.env.PHISH_API_KEY;
+  const candidates = [
+    `${API_BASE_URL}/shows/upcoming?apikey=${key}&callback=?`,
+    `${API_BASE_URL}/shows/upcoming.json?apikey=${key}`,
+    `${API_BASE_URL}/shows/upcoming?apikey=${key}&format=json`
+  ];
+
+  let raw = [];
+  for (const url of candidates) {
+    try {
+      const resp = await axios.get(url, { timeout: 15000 });
+      const data = typeof resp.data === 'string' ? parseJsonp(resp.data) : resp.data;
+      if (data && data.response && Array.isArray(data.response.data)) {
+        raw = data.response.data;
+        break;
+      }
+      // Some variants may return the array directly
+      if (Array.isArray(data)) {
+        raw = data;
+        break;
+      }
+    } catch (e) {
+      // Try next candidate
+      continue;
+    }
+  }
 
   // Normalize and filter for Phish only
   const isPhish = (s) => {
@@ -139,8 +158,14 @@ router.get('/harry-hood-stats', async (req, res) => {
     const { computeProbabilityFromSetlists } = require('../utils/probability');
     const probabilityPct = computeProbabilityFromSetlists(shows);
 
-    // Upcoming shows for Phish only
-    const upcoming = await fetchUpcomingShows();
+    // Upcoming shows for Phish only (fail-safe to empty array on error)
+    let upcoming = [];
+    try {
+      upcoming = await fetchUpcomingShows();
+    } catch (e) {
+      console.warn('Fetching upcoming shows failed:', e.message);
+      upcoming = [];
+    }
 
     // Determine if there is a Phish show today (local date)
     const today = new Date();
