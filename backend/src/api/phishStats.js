@@ -33,6 +33,54 @@ async function fetchLatestSetlists(limit = 200, offset = 0) {
     : [];
 }
 
+// Fetch upcoming shows from phish.net and return an array of normalized show objects
+async function fetchUpcomingShows() {
+  // Try JSONP like other v3 endpoints for consistency
+  const url = `${API_BASE_URL}/shows/upcoming?apikey=${process.env.PHISH_API_KEY}&callback=?`;
+  const resp = await axios.get(url, { timeout: 15000 });
+  const parsed = parseJsonp(resp.data);
+  const raw = parsed && parsed.response && Array.isArray(parsed.response.data)
+    ? parsed.response.data
+    : [];
+
+  // Normalize and filter for Phish only
+  const isPhish = (s) => {
+    const fields = [s.artist, s.artist_name, s.band, s.artist_slug, s.artistid, s.gid, s.group];
+    if (typeof s.artistid === 'number' && s.artistid === 1) return true; // common Phish id in phish.net
+    return fields.some(f => typeof f === 'string' && /phish/i.test(f));
+  };
+
+  const norm = raw
+    .filter(isPhish)
+    .map(s => {
+      // Prefer ISO showdate if present; fallback to short_date (MM/DD/YYYY)
+      let isoDate = null;
+      if (s.showdate) {
+        isoDate = s.showdate; // often YYYY-MM-DD
+      } else if (s.short_date) {
+        const parts = String(s.short_date).split('/');
+        if (parts.length === 3) {
+          const [mm, dd, yyyy] = parts;
+          isoDate = `${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
+        }
+      }
+      return {
+        id: String(s.showid || s.show_id || `${s.venueid || ''}-${isoDate || ''}`),
+        date: isoDate,
+        venue: stripHtml(s.venue || s.venue_name || s.location || ''),
+        city: s.city || '',
+        state: s.state || s.region || '',
+        country: s.country || '',
+        url: s.url || s.link || ''
+      };
+    })
+    .filter(s => !!s.date);
+
+  // Sort ascending by date
+  norm.sort((a, b) => new Date(a.date) - new Date(b.date));
+  return norm;
+}
+
 router.get('/harry-hood-stats', async (req, res) => {
   try {
     console.log('Starting API request (2-year window)...');
@@ -82,7 +130,7 @@ router.get('/harry-hood-stats', async (req, res) => {
       return;
     }
 
-  const hoodShow = shows[hoodIndex];
+    const hoodShow = shows[hoodIndex];
 
     // Calculate shows since last performance as the number of shows that occurred after that show
     const showsSince = hoodIndex; // because index 0 is most recent
@@ -91,6 +139,29 @@ router.get('/harry-hood-stats', async (req, res) => {
     const { computeProbabilityFromSetlists } = require('../utils/probability');
     const probabilityPct = computeProbabilityFromSetlists(shows);
 
+    // Upcoming shows for Phish only
+    const upcoming = await fetchUpcomingShows();
+
+    // Determine if there is a Phish show today (local date)
+    const today = new Date();
+    const formatYMD = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const todayStr = formatYMD(today);
+    const hasShowToday = upcoming.some(s => s.date === todayStr);
+
+    // Likely Hood (tonight): if show today, same as probability; else small random [0.000001, 0.1]
+    let likelyHoodPct;
+    if (hasShowToday) {
+      likelyHoodPct = probabilityPct;
+    } else {
+      const r = 0.000001 + Math.random() * (0.1 - 0.000001); // fraction
+      likelyHoodPct = Math.max(0.01, Math.round(r * 10000) / 100); // show with 2 decimals, min 0.01%
+    }
+
+    // Predict next expected performance using geometric expectation ~ ceil(1/p)
+    const p = Math.max(0.0001, Math.min(0.99, probabilityPct / 100));
+    const expectedIndex = Math.max(0, Math.ceil(1 / p) - 1);
+    const predicted = upcoming.length ? upcoming[Math.min(expectedIndex, upcoming.length - 1)] : null;
+
     res.json({
       lastPerformance: {
         date: hoodShow.short_date,
@@ -98,7 +169,10 @@ router.get('/harry-hood-stats', async (req, res) => {
         setlist: hoodShow.setlistdata
       },
       showsSinceLastPerformance: showsSince,
-      probability: probabilityPct
+      probability: probabilityPct,
+      likelyHood: likelyHoodPct,
+      nextExpectedPerformance: predicted,
+      upcomingShows: upcoming
     });
 
   } catch (error) {
